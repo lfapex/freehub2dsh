@@ -40,6 +40,174 @@ const HUB_SETTINGS = path.join(HUB_HOME, 'hub', 'settings.json')
 const START_TIMEOUT_MS = 30000
 const REFRESH_MS = 5 * 60000
 
+/**
+ * Picker group titles — a faithful copy of what dsh-our-free-model shows:
+ * its `ROUTE_LABELS` (the free lane, main + region), the Kilo heading, and
+ * every channel-pack `product.displayName`. DSH groups the picker strictly by
+ * provider route, so each platform is its own registered provider and this
+ * key order is the group order the picker shows.
+ *
+ * Hub-only lanes (Kilo / AtomCode / Relay / Virtual) carry headings the
+ * reference plugin never shows. `opencode` and `gemini` keep their reference
+ * headings although the hub serves neither today (the pack mounts with
+ * opencode disabled and the hub's channel lane drops gemini rows), so those
+ * two groups stay empty until the hub emits them. `freehub` is the catch-all
+ * for a channel provider this table grows stale on.
+ */
+export const PLATFORM_LABELS = {
+  'our-free-model': 'Our Free Model',
+  'our-free-model-region': 'Our Free Model · region-limited',
+  kilo: 'Kilo',
+  atomcode: 'AtomCode',
+  codearts: 'CodeArts Agent',
+  buddy: 'CodeBuddy (腾讯)',
+  workbuddy: 'WorkBuddy (国际版)',
+  lobsterai: 'LobsterAI (有道)',
+  qoder: 'Qoder',
+  qodercn: 'Qoder (中国版)',
+  trae: 'TRAE (字节)',
+  cline: 'Cline',
+  loomy: 'Loomy (讯飞)',
+  raccoon: 'Raccoon (商汤)',
+  minimax: 'MiniMax Code',
+  zcode: 'ZCode (智谱)',
+  opencode: 'OpenCode',
+  gemini: 'Gemini Code Assist',
+  relay: 'Relay',
+  virtual: 'Virtual',
+  freehub: 'Free Model Hub',
+}
+
+const PLATFORM_IDS = Object.keys(PLATFORM_LABELS)
+
+/**
+ * Which picker group a hub roster row belongs to.
+ *
+ * Same precedence the reference and the Copilot sibling use: lane tags
+ * (`channel` / `owned_by`) decide first and win over any id shape, because the
+ * hub's roster rows carry them. The free lane splits on the live verdict —
+ * a row the probe marked region-blocked lands under `region-limited`, while a
+ * row that is merely region-*sensitive* but routable stays in the main group
+ * (exactly dsh-our-free-model's membership rule).
+ */
+export function platformOf(entry) {
+  const id = textOf(entry?.id)
+  const channel = textOf(entry?.channel)
+  const provider = textOf(entry?.provider)
+  const owned = textOf(entry?.owned_by)
+  if (channel === 'kilo' || owned === 'kilo') return 'kilo'
+  if (channel === 'atomcode' || owned === 'atomcode' || id.startsWith('atomcode/')) return 'atomcode'
+  if (channel === 'virtual' || owned === 'virtual') return 'virtual'
+  if (channel === 'relay' || owned.startsWith('relay:')) return 'relay'
+  if (channel === 'chan' || owned.startsWith('chan:')) {
+    const head = chanProviderOf(provider, owned, id)
+    return PLATFORM_LABELS[head] !== undefined ? head : 'freehub'
+  }
+  if (textOf(entry?.state) === 'region-blocked') return 'our-free-model-region'
+  return 'our-free-model'
+}
+
+/** Bare model id the picker shows: routing prefixes belong to the group heading. */
+export function pickerIdOf(entry) {
+  const id = textOf(entry?.id)
+  if (id === '') return ''
+  const platform = platformOf(entry)
+  if (platform === 'atomcode' && id.startsWith('atomcode/')) return id.slice('atomcode/'.length)
+  const channel = textOf(entry?.channel)
+  const owned = textOf(entry?.owned_by)
+  if (channel === 'chan' || owned.startsWith('chan:')) {
+    const head = chanProviderOf(textOf(entry?.provider), owned, id)
+    if (head !== '' && id.startsWith(`${head}/`)) return id.slice(head.length + 1)
+  }
+  return id
+}
+
+/** Friendly picker name: never the `provider/model` wire id, never a raw slug. */
+export function displayNameOf(entry) {
+  const id = textOf(entry?.id)
+  const given = textOf(entry?.name)
+  if (given !== '' && isPrettyName(given, id)) return given
+  const bare = bareId(id)
+  if (platformOf(entry) === 'kilo') return `Kilo ${titleCase(bare.replace(/:free$/i, ''))}`
+  return titleCase(bare.replace(/-free$/i, ''))
+}
+
+/**
+ * Hub `/hub-models` rows → the shell's internal roster, one row per
+ * (platform, picker id): two configured relays may legally declare the same
+ * model id, and the hub guarantees nothing else duplicates. A row with no id
+ * is dropped rather than picked — an idless model cannot be resolved, routed
+ * or shown.
+ */
+export function buildRoster(rows) {
+  const roster = []
+  const seen = new Set()
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (row === null || typeof row !== 'object') continue
+    const hubId = textOf(row.id)
+    if (hubId === '') continue
+    const platform = platformOf(row)
+    const pickerId = pickerIdOf(row) || hubId
+    const key = `${platform}\0${pickerId}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    roster.push({
+      hubId,
+      pickerId,
+      platform,
+      name: displayNameOf(row),
+      contextWindow: positiveInt(row.contextWindow) ?? 131072,
+      maxOutput: positiveInt(row.maxOutput) ?? 32768,
+      vision: row.vision === true,
+      efforts: Array.isArray(row.efforts) ? row.efforts.filter(item => typeof item === 'string' ? item !== '' : typeof item?.id === 'string' && item.id !== '') : [],
+      effortDefault: typeof row.effortDefault === 'string' ? row.effortDefault : undefined,
+    })
+  }
+  return roster
+}
+
+function chanProviderOf(provider, owned, id) {
+  if (provider !== '') return provider
+  if (owned.startsWith('chan:')) return owned.slice('chan:'.length)
+  return idHead(id)
+}
+
+function textOf(value) {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function idHead(id) {
+  const slash = id.indexOf('/')
+  return slash > 0 ? id.slice(0, slash) : ''
+}
+
+function bareId(id) {
+  const slash = id.lastIndexOf('/')
+  return slash >= 0 ? id.slice(slash + 1) : id
+}
+
+function positiveInt(value) {
+  return Number.isSafeInteger(value) && value > 0 ? value : undefined
+}
+
+/** True when `name` is already a picker label, not a routing id or a slug. */
+function isPrettyName(name, id) {
+  if (name === '' || name === id) return false
+  if (name.includes('/')) return false
+  if (/^[a-z0-9]+(?:[-_.:][a-z0-9]+)+$/.test(name)) return false
+  return true
+}
+
+function titleCase(raw) {
+  return raw
+    .replace(/[-_.:]+/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(word => word !== '')
+    .map(word => (/^\d/.test(word) ? word : word.charAt(0).toUpperCase() + word.slice(1)))
+    .join(' ')
+}
+
 export function apply(ctx, config) {
   const logger = ctx.logger ?? console
 
@@ -50,13 +218,25 @@ export function apply(ctx, config) {
 
   const settings = resolveEndpoint(config)
   const state = {
-    /** @type {Array<{id: string, name: string, contextWindow: number, maxOutput: number, vision: boolean, efforts?: string[]}>} */
+    /** @type {Array<{hubId: string, pickerId: string, platform: string, name: string, contextWindow: number, maxOutput: number, vision: boolean, efforts?: string[]}>} */
     roster: [],
+    /** pickerKey (`platform\\0pickerId`) or hubId → roster row */
     byId: new Map(),
   }
 
+  function lookup(provider, model) {
+    return state.byId.get(`${provider}\0${model}`) ?? state.byId.get(model)
+  }
+
+  function hubIdOf(provider, model) {
+    return lookup(provider, model)?.hubId ?? model
+  }
+
   const adapter = {
-    providerInfo: () => ({ id: 'freehub2dsh', name: 'Free Model Hub' }),
+    providerInfo(provider) {
+      const id = typeof provider === 'string' && provider.length > 0 ? provider : 'our-free-model'
+      return { id, name: PLATFORM_LABELS[id] ?? id }
+    },
 
     // dsh-llm prepareRoutes calls this at register time; a missing method is TypeError and the plugin never activates.
     providerRetryPolicy: () => undefined,
@@ -64,9 +244,9 @@ export function apply(ctx, config) {
     imageRequestPricing: () => undefined,
 
     async listModels(provider) {
-      return state.roster.map(entry => ({
+      return state.roster.filter(entry => entry.platform === provider).map(entry => ({
         provider,
-        id: entry.id,
+        id: entry.pickerId,
         name: entry.name,
         description: `${entry.vision ? 'vision + text' : 'text'} · ${Math.round(entry.contextWindow / 1024)}K context`,
         inputModalities: entry.vision ? ['text', 'image'] : ['text'],
@@ -74,25 +254,27 @@ export function apply(ctx, config) {
     },
 
     async resolveModel(provider, model) {
-      const entry = state.byId.get(model)
+      const entry = lookup(provider, model)
       if (entry === undefined) {
         return { provider, id: model, name: model, context: { contextWindow: 131072 }, defaultMaxTokens: 8192 }
       }
+      const contextWindow = Number.isInteger(entry.contextWindow) && entry.contextWindow > 0 ? entry.contextWindow : 131072
+      const defaultMaxTokens = Number.isSafeInteger(entry.maxOutput) && entry.maxOutput > 0 ? Math.min(entry.maxOutput, 32768) : 8192
       return {
         provider,
-        id: entry.id,
+        id: entry.pickerId,
         name: entry.name,
         inputModalities: entry.vision ? ['text', 'image'] : ['text'],
-        context: { contextWindow: entry.contextWindow },
-        defaultMaxTokens: Math.min(entry.maxOutput, 32768),
-        ...(Array.isArray(entry.efforts) && entry.efforts.length > 0
-          ? { reasoning: { efforts: entry.efforts, defaultEffort: entry.efforts[entry.efforts.length - 1] } }
-          : {}),
+        context: { contextWindow },
+        defaultMaxTokens,
+        ...reasoningOf(entry),
       }
     },
 
     async prepareCall(provider, model) {
-      return { model: await this.resolveModel(provider, model), stream: options => this.stream(options) }
+      const resolved = await this.resolveModel(provider, model)
+      const hubId = hubIdOf(provider, model)
+      return { model: resolved, stream: options => this.stream({ ...options, model: hubId }) }
     },
 
     /**
@@ -202,10 +384,13 @@ export function apply(ctx, config) {
     },
   }
 
-  const registration = ctx.llm.registerAdapter(['freehub2dsh'], adapter)
-  ctx.llm.registerConfigurableProviders?.([
-    { provider: 'freehub2dsh', displayName: 'Free Model Hub', settingsNs: name, settingsPath: [] },
-  ])
+  const registration = ctx.llm.registerAdapter(PLATFORM_IDS, adapter)
+  ctx.llm.registerConfigurableProviders?.(PLATFORM_IDS.map(provider => ({
+    provider,
+    displayName: PLATFORM_LABELS[provider],
+    settingsNs: name,
+    settingsPath: [],
+  })))
 
   /** Pull the hub's roster at boot (after any daemon start), then keep it fresh. */
   async function refreshRoster() {
@@ -217,10 +402,10 @@ export function apply(ctx, config) {
       })
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
       const payload = await response.json()
-      state.roster = payload.models ?? []
-      state.byId = new Map(state.roster.map(entry => [entry.id, entry]))
-      logger.info?.(`freehub2dsh: roster refreshed (${state.roster.length} models)`)
-      try { registration.replace(['freehub2dsh']) } catch { /* fiber already disposed */ }
+      state.roster = buildRoster(payload.models ?? [])
+      state.byId = new Map(state.roster.flatMap(entry => [[`${entry.platform}\0${entry.pickerId}`, entry], [entry.hubId, entry]]))
+      logger.info?.(`freehub2dsh: roster refreshed (${state.roster.length} models across ${new Set(state.roster.map(entry => entry.platform)).size} platforms)`)
+      try { registration.replace(PLATFORM_IDS) } catch { /* fiber already disposed */ }
     } catch (error) {
       logger.warn?.(`freehub2dsh: roster refresh failed (${error?.message ?? error}); the picker keeps the last roster`)
     }
@@ -229,8 +414,9 @@ export function apply(ctx, config) {
   ctx.llm.registerModelDiscovery?.(name, async () => {
     await refreshRoster()
     return state.roster.map(entry => ({
-      id: entry.id,
+      id: entry.pickerId,
       name: entry.name,
+      platform: entry.platform,
       contextWindow: entry.contextWindow,
       maxTokens: entry.maxOutput,
       inputModalities: entry.vision ? ['text', 'image'] : ['text'],
@@ -383,6 +569,46 @@ function hubHeaders(settings) {
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+/** Hub roster stores effort ids as strings; dsh-llm requires `{ id, name }` objects. */
+export function reasoningOf(entry) {
+  const raw = Array.isArray(entry?.efforts) ? entry.efforts : []
+  const seen = new Set()
+  const efforts = []
+  for (const item of raw) {
+    const id = typeof item === 'string' ? item : typeof item?.id === 'string' ? item.id : ''
+    if (id === '' || seen.has(id)) continue
+    seen.add(id)
+    const name = typeof item === 'object' && typeof item?.name === 'string' && item.name !== '' ? item.name : effortLabel(id)
+    efforts.push({
+      id,
+      name,
+      ...(typeof item === 'object' && typeof item?.description === 'string' && item.description !== '' ? { description: item.description } : {}),
+    })
+  }
+  if (efforts.length === 0) return {}
+  const preferred = typeof entry.effortDefault === 'string' ? entry.effortDefault
+    : typeof entry.effort_default === 'string' ? entry.effort_default
+    : undefined
+  const defaultEffort = preferred !== undefined && seen.has(preferred) ? preferred : efforts[efforts.length - 1].id
+  return { reasoning: { efforts, defaultEffort } }
+}
+
+function effortLabel(id) {
+  switch (id) {
+    case 'none': return 'Off'
+    case 'disabled': return 'Off'
+    case 'light': return 'Light'
+    case 'low': return 'Low'
+    case 'balanced': return 'Balanced'
+    case 'medium': return 'Medium'
+    case 'high': return 'High'
+    case 'deep': return 'Deep'
+    case 'xhigh': return 'Extra high'
+    case 'max': return 'Max'
+    default: return id
+  }
 }
 
 /** dsh-llm invariant: every delta addresses an open block (start → delta → end). */
