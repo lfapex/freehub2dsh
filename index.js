@@ -78,7 +78,32 @@ export const PLATFORM_LABELS = {
   freehub: 'Free Model Hub',
 }
 
-const PLATFORM_IDS = Object.keys(PLATFORM_LABELS)
+/**
+ * Provider-route prefix for every route this plugin registers.
+ *
+ * dsh-llm keeps one flat namespace per profile: `registerAdapter` and
+ * `registerConfigurableProviders` both refuse a route already declared by any
+ * plugin. dsh-our-free-model's channel-pack claims the bare channel names
+ * (`codearts`, `buddy`, `minimax`, `qoder`, `trae`, `cline`, `zcode`, ...)
+ * plus the two free-lane routes, so this plugin must not re-declare them.
+ * The hub owns adapter+directory rows under this prefix only; a hub row's
+ * own `channel` / `owned_by` tags keep their bare form and are still what
+ * `platformOf` returns and `state.byId` keys on.
+ */
+const ROUTE_PREFIX = 'freehub-'
+
+/** Bare platform key → the provider route actually registered. */
+function routeOf(platform) {
+  return platform === '' ? ROUTE_PREFIX + 'freehub' : ROUTE_PREFIX + platform
+}
+
+/** Registered provider route → bare platform key. Inverse of {@link routeOf}. */
+function platformOfRoute(route) {
+  const bare = typeof route === 'string' && route.startsWith(ROUTE_PREFIX) ? route.slice(ROUTE_PREFIX.length) : ''
+  return PLATFORM_LABELS[bare] !== undefined ? bare : 'freehub'
+}
+
+const PLATFORM_IDS = Object.keys(PLATFORM_LABELS).map(routeOf)
 
 /**
  * Which picker group a hub roster row belongs to.
@@ -224,8 +249,18 @@ export function apply(ctx, config) {
     byId: new Map(),
   }
 
+  /**
+   * Find a roster row by whatever the dsh side is holding.
+   *
+   * `provider` arrives as the registered route (`freehub-<platform>`) from
+   * providerInfo / listModels / resolveModel / prepareCall, and `model` is the
+   * picker id or — when a caller round-trips the hub-side id — the wire id
+   * itself. Index keys stay in bare platform space, so translate the route
+   * first and keep the bare-id short-circuit last.
+   */
   function lookup(provider, model) {
-    return state.byId.get(`${provider}\0${model}`) ?? state.byId.get(model)
+    const platform = platformOfRoute(provider)
+    return state.byId.get(`${platform}\0${model}`) ?? state.byId.get(model)
   }
 
   function hubIdOf(provider, model) {
@@ -234,8 +269,8 @@ export function apply(ctx, config) {
 
   const adapter = {
     providerInfo(provider) {
-      const id = typeof provider === 'string' && provider.length > 0 ? provider : 'our-free-model'
-      return { id, name: PLATFORM_LABELS[id] ?? id }
+      const platform = platformOfRoute(provider)
+      return { id: routeOf(platform), name: PLATFORM_LABELS[platform] }
     },
 
     // dsh-llm prepareRoutes calls this at register time; a missing method is TypeError and the plugin never activates.
@@ -244,8 +279,9 @@ export function apply(ctx, config) {
     imageRequestPricing: () => undefined,
 
     async listModels(provider) {
-      return state.roster.filter(entry => entry.platform === provider).map(entry => ({
-        provider,
+      const platform = platformOfRoute(provider)
+      return state.roster.filter(entry => entry.platform === platform).map(entry => ({
+        provider: routeOf(platform),
         id: entry.pickerId,
         name: entry.name,
         description: `${entry.vision ? 'vision + text' : 'text'} · ${Math.round(entry.contextWindow / 1024)}K context`,
@@ -255,13 +291,14 @@ export function apply(ctx, config) {
 
     async resolveModel(provider, model) {
       const entry = lookup(provider, model)
+      const route = routeOf(platformOfRoute(provider))
       if (entry === undefined) {
-        return { provider, id: model, name: model, context: { contextWindow: 131072 }, defaultMaxTokens: 8192 }
+        return { provider: route, id: model, name: model, context: { contextWindow: 131072 }, defaultMaxTokens: 8192 }
       }
       const contextWindow = Number.isInteger(entry.contextWindow) && entry.contextWindow > 0 ? entry.contextWindow : 131072
       const defaultMaxTokens = Number.isSafeInteger(entry.maxOutput) && entry.maxOutput > 0 ? Math.min(entry.maxOutput, 32768) : 8192
       return {
-        provider,
+        provider: route,
         id: entry.pickerId,
         name: entry.name,
         inputModalities: entry.vision ? ['text', 'image'] : ['text'],
@@ -385,9 +422,9 @@ export function apply(ctx, config) {
   }
 
   const registration = ctx.llm.registerAdapter(PLATFORM_IDS, adapter)
-  ctx.llm.registerConfigurableProviders?.(PLATFORM_IDS.map(provider => ({
-    provider,
-    displayName: PLATFORM_LABELS[provider],
+  ctx.llm.registerConfigurableProviders?.(PLATFORM_IDS.map(route => ({
+    provider: route,
+    displayName: PLATFORM_LABELS[platformOfRoute(route)],
     settingsNs: name,
     settingsPath: [],
   })))

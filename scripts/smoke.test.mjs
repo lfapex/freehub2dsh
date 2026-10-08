@@ -140,6 +140,9 @@ test('hub string efforts become dsh {id,name} objects without duplicates', () =>
 
 test('PLATFORM_LABELS mirrors dsh-our-free-model per platform', () => {
   const L = mod.PLATFORM_LABELS
+  // Keys are the hub-side lane tags; the registered provider routes carry a
+  // freehub- prefix (see routeOf) so the bare channel names stay reserved for
+  // dsh-our-free-model's channel-pack.
   assert.equal(L['our-free-model'], 'Our Free Model')
   assert.equal(L['our-free-model-region'], 'Our Free Model · region-limited')
   assert.equal(L.kilo, 'Kilo')
@@ -305,60 +308,64 @@ test('hub roster registers one picker group per platform and re-binds hub wire i
   await Promise.race([ready, stall])
 
   // Every platform is its own registered provider; the array order is the
-  // picker's group order.
-  assert.deepEqual(providers, Object.keys(mod.PLATFORM_LABELS))
+  // picker's group order. Routes carry the freehub- prefix so they cannot
+  // collide with the bare channel names dsh-our-free-model's channel-pack
+  // declares in the same profile.
+  const bareKeys = Object.keys(mod.PLATFORM_LABELS)
+  assert.deepEqual(providers, bareKeys.map(platform => `freehub-${platform}`))
   assert.equal(configurable.length, providers.length)
-  assert.equal(configurable.find(row => row.provider === 'zcode').displayName, 'ZCode (智谱)')
-  assert.equal(configurable.find(row => row.provider === 'our-free-model').displayName, 'Our Free Model')
+  assert.equal(configurable.find(row => row.provider === 'freehub-zcode').displayName, 'ZCode (智谱)')
+  assert.equal(configurable.find(row => row.provider === 'freehub-our-free-model').displayName, 'Our Free Model')
 
-  assert.deepEqual(registered.providerInfo('buddy'), { id: 'buddy', name: 'CodeBuddy (腾讯)' })
-  assert.deepEqual(registered.providerInfo('our-free-model'), { id: 'our-free-model', name: 'Our Free Model' })
-  assert.deepEqual(registered.providerInfo('kilo'), { id: 'kilo', name: 'Kilo' })
-  assert.deepEqual(registered.providerInfo('freehub'), { id: 'freehub', name: 'Free Model Hub' })
+  // providerInfo maps a registered route back to its bare lane tag.
+  assert.deepEqual(registered.providerInfo('freehub-buddy'), { id: 'freehub-buddy', name: 'CodeBuddy (腾讯)' })
+  assert.deepEqual(registered.providerInfo('freehub-our-free-model'), { id: 'freehub-our-free-model', name: 'Our Free Model' })
+  assert.deepEqual(registered.providerInfo('freehub-kilo'), { id: 'freehub-kilo', name: 'Kilo' })
+  assert.deepEqual(registered.providerInfo('freehub-freehub'), { id: 'freehub-freehub', name: 'Free Model Hub' })
 
   // Free lane: bare ids, reference display names, region split by verdict.
-  const freeModels = await registered.listModels('our-free-model')
+  const freeModels = await registered.listModels('freehub-our-free-model')
   assert.deepEqual(freeModels.map(model => model.id), ['mimo-v2.6-flash-free', 'muse-spark-1.3-contributor-free'])
   const vision = freeModels.find(model => model.id === 'mimo-v2.6-flash-free')
   assert.equal(vision.name, 'MiMo V2.6 Flash')
   assert.deepEqual(vision.inputModalities, ['text', 'image'])
   assert.match(vision.description, /vision \+ text · 1024K context/)
-  const regionModels = await registered.listModels('our-free-model-region')
+  const regionModels = await registered.listModels('freehub-our-free-model-region')
   assert.deepEqual(regionModels.map(model => model.id), ['muse-spark-1.2-contributor-free'])
 
   // Kilo keeps its hub ids; channels lose the provider/ routing prefix.
-  const kiloModels = await registered.listModels('kilo')
+  const kiloModels = await registered.listModels('freehub-kilo')
   assert.deepEqual(kiloModels.map(model => model.id), ['nvidia/nemotron-3.5-lightning:free'])
   assert.equal(kiloModels[0].name, 'Kilo Nemotron 3.5 Lightning')
-  const buddyModels = await registered.listModels('buddy')
+  const buddyModels = await registered.listModels('freehub-buddy')
   assert.deepEqual(buddyModels.map(model => model.id), ['deepseek-v4-pro'])
   assert.equal(buddyModels[0].name, 'DeepSeek V4 Pro')
-  assert.equal(buddyModels[0].provider, 'buddy')
-  assert.deepEqual((await registered.listModels('atomcode')).map(model => model.id), ['GLM-5.2'])
-  assert.deepEqual((await registered.listModels('relay')).map(model => model.id), ['gpt-4o'])
-  assert.deepEqual((await registered.listModels('virtual')).map(model => model.id), ['my-alias'])
-  const fallback = await registered.listModels('freehub')
+  assert.equal(buddyModels[0].provider, 'freehub-buddy')
+  assert.deepEqual((await registered.listModels('freehub-atomcode')).map(model => model.id), ['GLM-5.2'])
+  assert.deepEqual((await registered.listModels('freehub-relay')).map(model => model.id), ['gpt-4o'])
+  assert.deepEqual((await registered.listModels('freehub-virtual')).map(model => model.id), ['my-alias'])
+  const fallback = await registered.listModels('freehub-freehub')
   assert.deepEqual(fallback.map(model => model.id), ['gpt-x'])
   assert.equal(fallback[0].name, 'Gpt X')
 
   // resolveModel: reference-grade facts, efforts as {id,name} objects.
-  const free = await registered.resolveModel('our-free-model', 'mimo-v2.6-flash-free')
+  const free = await registered.resolveModel('freehub-our-free-model', 'mimo-v2.6-flash-free')
   assert.equal(free.name, 'MiMo V2.6 Flash')
   assert.equal(free.context.contextWindow, 1048576)
   assert.equal(free.defaultMaxTokens, 32768)
   assert.deepEqual(free.reasoning.efforts.map(effort => effort.id), ['low', 'high'])
   assert.equal(free.reasoning.defaultEffort, 'high')
-  const kilo = await registered.resolveModel('kilo', 'nvidia/nemotron-3.5-lightning:free')
+  const kilo = await registered.resolveModel('freehub-kilo', 'nvidia/nemotron-3.5-lightning:free')
   assert.deepEqual(kilo.reasoning.efforts.map(effort => effort.id), ['disabled', 'low', 'medium', 'high'])
   assert.deepEqual(kilo.reasoning.efforts.map(effort => effort.name), ['Off', 'Low', 'Medium', 'High'])
 
   // A turn aimed at a picker id must reach the hub under the wire id.
-  const buddyCall = await registered.prepareCall('buddy', 'deepseek-v4-pro')
+  const buddyCall = await registered.prepareCall('freehub-buddy', 'deepseek-v4-pro')
   assert.equal(buddyCall.model.name, 'DeepSeek V4 Pro')
   for await (const chunk of buddyCall.stream({ messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }] })) { void chunk }
   assert.equal(chatBody.model, 'buddy/deepseek-v4-pro')
 
-  const fallbackCall = await registered.prepareCall('freehub', 'gpt-x')
+  const fallbackCall = await registered.prepareCall('freehub-freehub', 'gpt-x')
   assert.equal(fallbackCall.model.name, 'Gpt X')
   for await (const chunk of fallbackCall.stream({ messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }] })) { void chunk }
   assert.equal(chatBody.model, 'newchan/gpt-x')

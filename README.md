@@ -28,6 +28,21 @@ TRAE / ZCode …**，每组内显示 hub 的模型名（去掉 `provider/model` 
 （`http://127.0.0.1:8331/`）登录白嫖渠道、添加中转站后，模型最多 5 分钟自动
 进入选择器对应分组；选择器的"检测模型"也会立即重拉。
 
+### Provider 路由带 `freehub-` 前缀
+
+dsh-llm 在同一个 profile 内只有一张扁平的路由表：任何 provider 名被两个插件
+重复声明，后注册的那个插件整批激活失败（`DUPLICATE_ADAPTER` /
+`DUPLICATE_DIRECTORY`）。`dsh-our-free-model` 的 channel-pack 已占用
+`codearts`、`buddy`、`minimax`、`qoder`、`trae`、`cline`、`zcode` 等裸渠道名
+与两条免费车道名，因此本插件注册的每个 provider 都加 `freehub-` 前缀
+（如 `freehub-minimax`、`freehub-codearts`）。
+
+**这只是 dsh 侧的分组标签，不影响调用**：hub 收到的模型 ID 始终是 hub 自己
+在 `/hub-models` 行里给出的线路原始 id（如 `buddy/deepseek-v4-pro`），picker 里
+展示的分组标题也仍是人类可读名（"MiniMax Code"、"CodeBuddy (腾讯)"）。若你的
+`cordis.patch.yml` 里写死过 `provider`（默认模型、agent 预设等），重装后需把
+裸渠道名改成对应的 `freehub-<渠道名>`，例如 `codearts` → `freehub-codearts`。
+
 ## 零配置
 
 本机运行 hub 时**无需任何配置**：
