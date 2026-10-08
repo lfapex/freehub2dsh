@@ -93,3 +93,20 @@ test('a turn against a dead hub yields the install hint, not a raw stack', async
   assert.ok(!/at \w+ \(/.test(finish.reason.failure.message), 'no stack frames leak into the message')
   globalThis.fetch = originalFetch
 })
+
+test('endpoint resolution: explicit config wins and skips file-key hydration', () => {
+  const settings = mod.resolveEndpoint({ hubBaseUrl: 'http://10.0.0.8:8330', hubKey: 'K-remote' })
+  assert.equal(settings.baseUrl, 'http://10.0.0.8:8330')
+  assert.equal(settings.key, 'K-remote')
+  assert.equal(settings.keyFromFile, false)
+  assert.equal(mod.isLocalHub(settings.baseUrl), false)
+})
+
+test('endpoint resolution: missing key file degrades to empty key, still local', () => {
+  const missing = path.join(os.tmpdir(), 'no-such-freehub-settings.json')
+  const key = mod.readHubKey(missing)
+  assert.equal(key, '')
+  const settings = mod.resolveEndpoint({})
+  assert.equal(settings.keyFromFile, true)
+  assert.equal(mod.isLocalHub(settings.baseUrl), true)
+})

@@ -53,7 +53,6 @@ export function apply(ctx, config) {
     /** @type {Array<{id: string, name: string, contextWindow: number, maxOutput: number, vision: boolean, efforts?: string[]}>} */
     roster: [],
     byId: new Map(),
-    started: false,
   }
 
   const adapter = {
@@ -102,7 +101,7 @@ export function apply(ctx, config) {
       if (options.signal?.aborted === true) onAbort()
       else options.signal?.addEventListener('abort', onAbort, { once: true })
       try {
-        if (settings.key === '') await ensureDaemon(logger, settings)
+        await ensureDaemon(logger, settings)
         const response = await fetch(`${settings.baseUrl}/v1/chat/completions`, {
           method: 'POST',
           headers: hubHeaders(settings),
@@ -209,7 +208,7 @@ export function apply(ctx, config) {
   /** Pull the hub's roster at boot (after any daemon start), then keep it fresh. */
   async function refreshRoster() {
     try {
-      if (settings.key === '') await ensureDaemon(logger, settings)
+      await ensureDaemon(logger, settings)
       const response = await fetch(`${settings.baseUrl}/hub-models`, {
         headers: hubHeaders(settings),
         signal: AbortSignal.timeout(15000),
@@ -252,15 +251,17 @@ export function apply(ctx, config) {
  * Endpoint settings, in priority order: dsh plugin settings →
  * `<DSH_HOME>/freehub2dsh/endpoint.json` → the hub data directory's own
  * server key with the default base URL (the zero-configuration path).
+ *
+ * `keyFromFile` is true when the key was (or will be) read from the hub
+ * data dir, so autostart can re-hydrate it after first boot mints one.
  */
-function resolveEndpoint(config) {
+export function resolveEndpoint(config) {
   const fromConfig = {
     baseUrl: config?.hubBaseUrl,
     key: config?.hubKey,
-    enabled: config?.hubEnabled,
   }
   if (typeof fromConfig.baseUrl === 'string' && fromConfig.baseUrl !== '' && typeof fromConfig.key === 'string' && fromConfig.key !== '') {
-    return { baseUrl: fromConfig.baseUrl.replace(/\/+$/, ''), key: fromConfig.key }
+    return { baseUrl: fromConfig.baseUrl.replace(/\/+$/, ''), key: fromConfig.key, keyFromFile: false }
   }
   try {
     const home = process.env.DSH_HOME ?? path.join(process.env.USERPROFILE ?? process.env.HOME ?? homedir(), '.dsh')
@@ -268,15 +269,28 @@ function resolveEndpoint(config) {
     if (existsSync(file)) {
       const parsed = JSON.parse(readFileSync(file, 'utf8'))
       if (typeof parsed?.baseUrl === 'string' && typeof parsed?.key === 'string' && parsed.key !== '') {
-        return { baseUrl: parsed.baseUrl.replace(/\/+$/, ''), key: parsed.key }
+        return { baseUrl: parsed.baseUrl.replace(/\/+$/, ''), key: parsed.key, keyFromFile: false }
       }
     }
   } catch { /* fall through to the zero-config path */ }
-  return { baseUrl: typeof fromConfig.baseUrl === 'string' && fromConfig.baseUrl !== '' ? fromConfig.baseUrl.replace(/\/+$/, '') : DEFAULT_BASE, key: readHubKey(HUB_SETTINGS) }
+  return {
+    baseUrl: typeof fromConfig.baseUrl === 'string' && fromConfig.baseUrl !== '' ? fromConfig.baseUrl.replace(/\/+$/, '') : DEFAULT_BASE,
+    key: readHubKey(HUB_SETTINGS),
+    keyFromFile: true,
+  }
+}
+
+export function isLocalHub(baseUrl) {
+  try {
+    const hostname = new URL(baseUrl).hostname
+    return hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '::1'
+  } catch {
+    return true
+  }
 }
 
 /** Read-only peek at the hub's own settings file; absence means no key yet. */
-function readHubKey(file) {
+export function readHubKey(file = HUB_SETTINGS) {
   try {
     const parsed = JSON.parse(readFileSync(file, 'utf8'))
     const key = parsed?.server?.key
@@ -286,47 +300,63 @@ function readHubKey(file) {
   }
 }
 
+function hydrateKey(settings) {
+  if (settings.keyFromFile !== true) return
+  const fresh = readHubKey(HUB_SETTINGS)
+  if (fresh !== '') settings.key = fresh
+}
+
+let daemonStarting = false
+
 /**
- * Make sure a daemon is reachable, starting one from PATH when it is not.
- * Idempotent across plugin reloads within this dsh process; the spawned
- * process is detached and outlives dsh on purpose — the hub belongs to the
- * machine, not to one client.
+ * Make sure a local daemon is reachable, starting one from PATH when it is
+ * not. Remote hubs are left alone. After spawn the key is re-read from the
+ * hub data dir — first boot mints it, and a previous empty read must not
+ * stick. The spawned process is detached and outlives dsh on purpose.
  */
-async function ensureDaemon(logger, settings) {
+export async function ensureDaemon(logger, settings) {
+  if (settings.keyFromFile !== true) return
+  if (!isLocalHub(settings.baseUrl)) return
+  hydrateKey(settings)
   if (await hubAlive(settings)) return
-  if (state.started) {
-    // A start is already in flight from this process; wait for it.
+  if (daemonStarting) {
     for (let waited = 0; waited < START_TIMEOUT_MS; waited += 500) {
       await sleep(500)
+      hydrateKey(settings)
       if (await hubAlive(settings)) return
     }
     throw new Error('the hub daemon did not come up in time')
   }
-  state.started = true
+  daemonStarting = true
   let child
   try {
     child = spawn('free-model-hub', {
       detached: true,
       stdio: 'ignore',
       shell: process.platform === 'win32',
+      windowsHide: true,
       env: process.env,
     })
   } catch (error) {
-    state.started = false
+    daemonStarting = false
     throw new Error(`could not spawn the hub daemon: ${error?.message ?? error}`)
   }
-  child.on('error', () => { state.started = false })
+  child.on('error', () => { daemonStarting = false })
   child.unref?.()
   logger.info?.('freehub2dsh: hub daemon not running — starting it from PATH (detached)')
-  for (let waited = 0; waited < START_TIMEOUT_MS; waited += 500) {
-    await sleep(500)
-    if (await hubAlive(settings)) {
-      logger.info?.('freehub2dsh: hub daemon is up')
-      return
+  try {
+    for (let waited = 0; waited < START_TIMEOUT_MS; waited += 500) {
+      await sleep(500)
+      hydrateKey(settings)
+      if (await hubAlive(settings)) {
+        logger.info?.('freehub2dsh: hub daemon is up')
+        return
+      }
     }
+    throw new Error('the hub daemon was started but never answered — is `free-model-hub` installed (`npm i -g github:lfapex/free-model-hub`)?')
+  } finally {
+    daemonStarting = false
   }
-  state.started = false
-  throw new Error('the hub daemon was started but never answered — is `free-model-hub` installed (`npm i -g github:lfapex/free-model-hub`)?')
 }
 
 async function hubAlive(settings) {

@@ -27,7 +27,8 @@ dsh plugin --profile <你的profile名> add github:lfapex/freehub2dsh
 
 - **密钥**自动从 `~/.free-model-hub/hub/settings.json` 读取（只读，绝不回写）；
 - **daemon 未运行时自动从 PATH 拉起** `free-model-hub`（detached 进程，
-  与 dsh 解耦——关掉 dsh，hub 与 Copilot 侧照常工作）；
+  与 dsh 解耦——关掉 dsh，hub 与 Copilot 侧照常工作）。首次启动会重读
+  刚写入的密钥；hub 崩溃后再对话也会再拉起；
 - 插件每 5 分钟轮询 `/hub-models`，清单跟随 hub 实时变化。
 
 手动覆盖（仅在 hub 不在本机或改过端口时需要），二选一：
