@@ -128,8 +128,17 @@ export function platformOf(entry) {
     const head = chanProviderOf(provider, owned, id)
     return PLATFORM_LABELS[head] !== undefined ? head : 'freehub'
   }
-  if (textOf(entry?.state) === 'region-blocked') return 'our-free-model-region'
-  return 'our-free-model'
+  // opencode 和 gemini 按 id 前缀判断（参考 dsh-our-free-model 的逻辑）
+  if (id.startsWith('opencode/')) return 'opencode'
+  if (id.startsWith('gemini/') || id.startsWith('google/gemini')) return 'gemini'
+  // 匿名免费通道的模型才归入 our-free-model
+  // channel 为 'free' 或空字符串时，是匿名免费通道
+  if (channel === 'free' || channel === 'anon' || channel === '' || channel === 'our-free-model') {
+    if (textOf(entry?.state) === 'region-blocked') return 'our-free-model-region'
+    return 'our-free-model'
+  }
+  // 其他未知 channel 归入 freehub 兜底组
+  return 'freehub'
 }
 
 /** Bare model id the picker shows: routing prefixes belong to the group heading. */
@@ -138,6 +147,9 @@ export function pickerIdOf(entry) {
   if (id === '') return ''
   const platform = platformOf(entry)
   if (platform === 'atomcode' && id.startsWith('atomcode/')) return id.slice('atomcode/'.length)
+  if (platform === 'opencode' && id.startsWith('opencode/')) return id.slice('opencode/'.length)
+  if (platform === 'gemini' && id.startsWith('gemini/')) return id.slice('gemini/'.length)
+  if (platform === 'gemini' && id.startsWith('google/gemini/')) return id.slice('google/gemini/'.length)
   const channel = textOf(entry?.channel)
   const owned = textOf(entry?.owned_by)
   if (channel === 'chan' || owned.startsWith('chan:')) {
@@ -224,13 +236,15 @@ function isPrettyName(name, id) {
 }
 
 function titleCase(raw) {
+  // 保留短划线，只处理下划线、冒号和点号
+  // 这样 deepseek-v4 保持为 Deepseek-V4，而不是 Deepseek V4
   return raw
-    .replace(/[-_.:]+/g, ' ')
+    .replace(/[_.:]+/g, '-')
     .trim()
-    .split(/\s+/)
+    .split('-')
     .filter(word => word !== '')
     .map(word => (/^\d/.test(word) ? word : word.charAt(0).toUpperCase() + word.slice(1)))
-    .join(' ')
+    .join('-')
 }
 
 export function apply(ctx, config) {
