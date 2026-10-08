@@ -1,6 +1,6 @@
 {
   "name": "freehub2dsh",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "description": "dsh 插件：把 free-model-hub 后台的模型清单注册进 dsh 选择器，对话流量代理到 hub 的 OpenAI 兼容端口。本机运行 hub 时零配置——密钥自动读取、daemon 未运行时自动从 PATH 拉起。",
@@ -18,11 +18,6 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
-    },
-    "client": {
-      "platform": "web",
-      "immediately": true,
-      "inject": []
     }
   },
   "engines": {

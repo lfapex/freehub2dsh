@@ -133,6 +133,7 @@ export function apply(ctx, config) {
         }
         const reader = body.getReader()
         const decoder = new TextDecoder()
+        const sink = createBlockSink()
         let buffer = ''
         let usage
         let finish
@@ -156,18 +157,10 @@ export function apply(ctx, config) {
             }
             const delta = event.choices?.[0]?.delta
             if (delta !== undefined) {
-              if (typeof delta.content === 'string' && delta.content !== '') yield { type: 'text-delta', text: delta.content }
-              if (typeof delta.reasoning === 'string' && delta.reasoning !== '') yield { type: 'reasoning-delta', text: delta.reasoning }
+              if (typeof delta.content === 'string' && delta.content !== '') yield* sink.text(delta.content)
+              if (typeof delta.reasoning === 'string' && delta.reasoning !== '') yield* sink.reasoning(delta.reasoning)
               if (Array.isArray(delta.tool_calls)) {
-                for (const call of delta.tool_calls) {
-                  yield {
-                    type: 'tool-call-delta',
-                    index: call.index ?? 0,
-                    ...(call.id !== undefined ? { id: call.id } : {}),
-                    ...(call.function?.name !== undefined ? { name: call.function.name } : {}),
-                    ...(call.function?.arguments !== undefined ? { argumentsDelta: call.function.arguments } : {}),
-                  }
-                }
+                for (const call of delta.tool_calls) yield* sink.toolCall(call)
               }
             }
             if (event.usage !== undefined) usage = event.usage
@@ -175,6 +168,7 @@ export function apply(ctx, config) {
             if (typeof reason === 'string' && reason !== '') finish = reason
           }
         }
+        yield* sink.close()
         if (usage !== undefined) {
           yield {
             type: 'usage',
@@ -208,6 +202,11 @@ export function apply(ctx, config) {
     },
   }
 
+  const registration = ctx.llm.registerAdapter(['freehub2dsh'], adapter)
+  ctx.llm.registerConfigurableProviders?.([
+    { provider: 'freehub2dsh', displayName: 'Free Model Hub', settingsNs: name, settingsPath: [] },
+  ])
+
   /** Pull the hub's roster at boot (after any daemon start), then keep it fresh. */
   async function refreshRoster() {
     try {
@@ -221,20 +220,12 @@ export function apply(ctx, config) {
       state.roster = payload.models ?? []
       state.byId = new Map(state.roster.map(entry => [entry.id, entry]))
       logger.info?.(`freehub2dsh: roster refreshed (${state.roster.length} models)`)
+      try { registration.replace(['freehub2dsh']) } catch { /* fiber already disposed */ }
     } catch (error) {
       logger.warn?.(`freehub2dsh: roster refresh failed (${error?.message ?? error}); the picker keeps the last roster`)
     }
   }
 
-  void refreshRoster()
-  const timer = setInterval(() => { void refreshRoster() }, REFRESH_MS)
-  timer.unref?.()
-  ctx.on?.('dispose', () => clearInterval(timer))
-
-  const registration = ctx.llm.registerAdapter(['freehub2dsh'], adapter)
-  ctx.llm.registerConfigurableProviders?.([
-    { provider: 'freehub2dsh', displayName: 'Free Model Hub', settingsNs: name, settingsPath: [] },
-  ])
   ctx.llm.registerModelDiscovery?.(name, async () => {
     await refreshRoster()
     return state.roster.map(entry => ({
@@ -245,7 +236,11 @@ export function apply(ctx, config) {
       inputModalities: entry.vision ? ['text', 'image'] : ['text'],
     }))
   })
-  ctx.on?.('loader/volatile-update', () => registration.replace(state.roster.length > 0 ? ['freehub2dsh'] : []))
+
+  void refreshRoster()
+  const timer = setInterval(() => { void refreshRoster() }, REFRESH_MS)
+  timer.unref?.()
+  ctx.on?.('dispose', () => clearInterval(timer))
 }
 
 // ── endpoint resolution + daemon autostart ──────────────────────────────────
@@ -388,6 +383,70 @@ function hubHeaders(settings) {
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+/** dsh-llm invariant: every delta addresses an open block (start → delta → end). */
+function createBlockSink() {
+  const open = new Map()
+  let next = 0
+  let textIndex
+  let reasoningIndex
+  const tools = new Map()
+
+  function start(blockType) {
+    const index = next++
+    open.set(index, { type: blockType, text: '', id: '', name: '', args: '' })
+    return index
+  }
+
+  return {
+    * text(delta) {
+      if (textIndex === undefined) {
+        textIndex = start('text')
+        yield { type: 'block-start', index: textIndex, blockType: 'text' }
+      }
+      open.get(textIndex).text += delta
+      yield { type: 'text-delta', index: textIndex, text: delta }
+    },
+    * reasoning(delta) {
+      if (reasoningIndex === undefined) {
+        reasoningIndex = start('reasoning')
+        yield { type: 'block-start', index: reasoningIndex, blockType: 'reasoning' }
+      }
+      open.get(reasoningIndex).text += delta
+      yield { type: 'reasoning-delta', index: reasoningIndex, text: delta }
+    },
+    * toolCall(call) {
+      const wire = call.index ?? 0
+      let index = tools.get(wire)
+      if (index === undefined) {
+        index = start('tool-call')
+        tools.set(wire, index)
+        yield { type: 'block-start', index, blockType: 'tool-call' }
+      }
+      const partial = open.get(index)
+      if (typeof call.id === 'string' && call.id !== '') partial.id = call.id
+      if (typeof call.function?.name === 'string' && call.function.name !== '') partial.name = call.function.name
+      const args = typeof call.function?.arguments === 'string' ? call.function.arguments : ''
+      if (args !== '') partial.args += args
+      yield {
+        type: 'tool-call-delta',
+        index,
+        id: partial.id,
+        ...(partial.name !== '' ? { name: partial.name } : {}),
+        argumentsDelta: args,
+      }
+    },
+    * close() {
+      for (const [index, partial] of open) {
+        const block = partial.type === 'text' ? { type: 'text', text: partial.text }
+          : partial.type === 'reasoning' ? { type: 'reasoning', text: partial.text }
+          : { type: 'tool-call', id: partial.id, name: partial.name, arguments: partial.args }
+        yield { type: 'block-end', index, block }
+      }
+      open.clear()
+    },
+  }
 }
 
 /** dsh messages → OpenAI messages. */

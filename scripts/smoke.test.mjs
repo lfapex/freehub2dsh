@@ -73,13 +73,22 @@ test('SSE stream from a mock hub re-emits as dsh chunks with usage and finish', 
   }
   const text = chunks.filter(c => c.type === 'text-delta').map(c => c.text).join('')
   assert.equal(text, 'MOCK')
+  const textStart = chunks.find(c => c.type === 'block-start' && c.blockType === 'text')
+  assert.equal(typeof textStart?.index, 'number')
+  const textDelta = chunks.find(c => c.type === 'text-delta')
+  assert.equal(textDelta.index, textStart.index)
   const reasoning = chunks.find(c => c.type === 'reasoning-delta')
   assert.equal(reasoning?.text, 'thinking…')
+  assert.equal(typeof reasoning.index, 'number')
+  assert.ok(chunks.some(c => c.type === 'block-end' && c.block?.type === 'text'))
+  assert.ok(chunks.some(c => c.type === 'block-end' && c.block?.type === 'reasoning'))
   const usage = chunks.find(c => c.type === 'usage')
   assert.equal(usage.usage.totalTokens, 11)
   assert.equal(usage.usage.cacheReadTokens, 0)
   const finish = chunks.find(c => c.type === 'finish')
   assert.deepEqual(finish.reason, { kind: 'stop' })
+  const finishAt = chunks.findIndex(c => c.type === 'finish')
+  assert.ok(chunks.findIndex(c => c.type === 'block-end') < finishAt)
 
   globalThis.fetch = originalFetch
   server.close()
@@ -108,6 +117,13 @@ test('endpoint resolution: explicit config wins and skips file-key hydration', (
   assert.equal(settings.key, 'K-remote')
   assert.equal(settings.keyFromFile, false)
   assert.equal(mod.isLocalHub(settings.baseUrl), false)
+})
+
+test('package.json does not declare a web client without a ./client export', () => {
+  const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+  if (pkg.dsh?.client !== undefined) {
+    assert.ok(pkg.exports?.['./client'], 'dsh.client requires exports["./client"]; omitting it crashes DSH on boot')
+  }
 })
 
 test('endpoint resolution: missing key file degrades to empty key, still local', () => {
