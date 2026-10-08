@@ -108,37 +108,51 @@ const PLATFORM_IDS = Object.keys(PLATFORM_LABELS).map(routeOf)
 /**
  * Which picker group a hub roster row belongs to.
  *
- * Same precedence the reference and the Copilot sibling use: lane tags
- * (`channel` / `owned_by`) decide first and win over any id shape, because the
- * hub's roster rows carry them. The free lane splits on the live verdict —
- * a row the probe marked region-blocked lands under `region-limited`, while a
- * row that is merely region-*sensitive* but routable stays in the main group
- * (exactly dsh-our-free-model's membership rule).
+ * Hub 返回的模型数据只有 id 和 name，没有 channel/provider/owned_by 等标签字段。
+ * 因此我们只能通过 ID 前缀来判断模型的归属平台。
+ * 
+ * 判断优先级：
+ * 1. ID 前缀判断（codearts/、atomcode/、opencode/、gemini/ 等）
+ * 2. channel/owned_by 标签判断（kilo、relay、virtual、chan: 等，为未来扩展预留）
+ * 3. 默认归入 our-free-model（匿名免费通道）
  */
 export function platformOf(entry) {
   const id = textOf(entry?.id)
   const channel = textOf(entry?.channel)
   const provider = textOf(entry?.provider)
   const owned = textOf(entry?.owned_by)
+  
+  // 优先根据 ID 前缀判断各个平台
+  if (id.startsWith('codearts/')) return 'codearts'
+  if (id.startsWith('atomcode/')) return 'atomcode'
+  if (id.startsWith('opencode/')) return 'opencode'
+  if (id.startsWith('gemini/') || id.startsWith('google/gemini')) return 'gemini'
+  if (id.startsWith('buddy/')) return 'buddy'
+  if (id.startsWith('workbuddy/')) return 'workbuddy'
+  if (id.startsWith('lobsterai/')) return 'lobsterai'
+  if (id.startsWith('qoder/')) return 'qoder'
+  if (id.startsWith('qodercn/')) return 'qodercn'
+  if (id.startsWith('trae/')) return 'trae'
+  if (id.startsWith('cline/')) return 'cline'
+  if (id.startsWith('loomy/')) return 'loomy'
+  if (id.startsWith('raccoon/')) return 'raccoon'
+  if (id.startsWith('minimax/')) return 'minimax'
+  if (id.startsWith('zcode/')) return 'zcode'
+  if (id.startsWith('kilo/') || id.includes(':free')) return 'kilo'
+  
+  // 兼容带 channel/owned_by 标签的模型（未来扩展）
   if (channel === 'kilo' || owned === 'kilo') return 'kilo'
-  if (channel === 'atomcode' || owned === 'atomcode' || id.startsWith('atomcode/')) return 'atomcode'
+  if (channel === 'atomcode' || owned === 'atomcode') return 'atomcode'
   if (channel === 'virtual' || owned === 'virtual') return 'virtual'
   if (channel === 'relay' || owned.startsWith('relay:')) return 'relay'
   if (channel === 'chan' || owned.startsWith('chan:')) {
     const head = chanProviderOf(provider, owned, id)
     return PLATFORM_LABELS[head] !== undefined ? head : 'freehub'
   }
-  // opencode 和 gemini 按 id 前缀判断（参考 dsh-our-free-model 的逻辑）
-  if (id.startsWith('opencode/')) return 'opencode'
-  if (id.startsWith('gemini/') || id.startsWith('google/gemini')) return 'gemini'
-  // 匿名免费通道的模型才归入 our-free-model
-  // channel 为 'free' 或空字符串时，是匿名免费通道
-  if (channel === 'free' || channel === 'anon' || channel === '' || channel === 'our-free-model') {
-    if (textOf(entry?.state) === 'region-blocked') return 'our-free-model-region'
-    return 'our-free-model'
-  }
-  // 其他未知 channel 归入 freehub 兜底组
-  return 'freehub'
+  
+  // 默认归入匿名免费通道（our-free-model）
+  if (textOf(entry?.state) === 'region-blocked') return 'our-free-model-region'
+  return 'our-free-model'
 }
 
 /** Bare model id the picker shows: routing prefixes belong to the group heading. */
@@ -146,16 +160,36 @@ export function pickerIdOf(entry) {
   const id = textOf(entry?.id)
   if (id === '') return ''
   const platform = platformOf(entry)
+  
+  // 去除各个平台的 ID 前缀
+  if (platform === 'codearts' && id.startsWith('codearts/')) return id.slice('codearts/'.length)
   if (platform === 'atomcode' && id.startsWith('atomcode/')) return id.slice('atomcode/'.length)
   if (platform === 'opencode' && id.startsWith('opencode/')) return id.slice('opencode/'.length)
-  if (platform === 'gemini' && id.startsWith('gemini/')) return id.slice('gemini/'.length)
-  if (platform === 'gemini' && id.startsWith('google/gemini/')) return id.slice('google/gemini/'.length)
+  if (platform === 'gemini') {
+    if (id.startsWith('google/gemini/')) return id.slice('google/gemini/'.length)
+    if (id.startsWith('gemini/')) return id.slice('gemini/'.length)
+  }
+  if (platform === 'buddy' && id.startsWith('buddy/')) return id.slice('buddy/'.length)
+  if (platform === 'workbuddy' && id.startsWith('workbuddy/')) return id.slice('workbuddy/'.length)
+  if (platform === 'lobsterai' && id.startsWith('lobsterai/')) return id.slice('lobsterai/'.length)
+  if (platform === 'qoder' && id.startsWith('qoder/')) return id.slice('qoder/'.length)
+  if (platform === 'qodercn' && id.startsWith('qodercn/')) return id.slice('qodercn/'.length)
+  if (platform === 'trae' && id.startsWith('trae/')) return id.slice('trae/'.length)
+  if (platform === 'cline' && id.startsWith('cline/')) return id.slice('cline/'.length)
+  if (platform === 'loomy' && id.startsWith('loomy/')) return id.slice('loomy/'.length)
+  if (platform === 'raccoon' && id.startsWith('raccoon/')) return id.slice('raccoon/'.length)
+  if (platform === 'minimax' && id.startsWith('minimax/')) return id.slice('minimax/'.length)
+  if (platform === 'zcode' && id.startsWith('zcode/')) return id.slice('zcode/'.length)
+  if (platform === 'kilo' && id.startsWith('kilo/')) return id.slice('kilo/'.length)
+  
+  // 兼容带 channel 标签的模型（未来扩展）
   const channel = textOf(entry?.channel)
   const owned = textOf(entry?.owned_by)
   if (channel === 'chan' || owned.startsWith('chan:')) {
     const head = chanProviderOf(textOf(entry?.provider), owned, id)
     if (head !== '' && id.startsWith(`${head}/`)) return id.slice(head.length + 1)
   }
+  
   return id
 }
 
