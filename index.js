@@ -48,15 +48,14 @@ const REFRESH_MS = 5 * 60000
  * key order is the group order the picker shows.
  *
  * Hub-only lanes (Kilo / AtomCode / Relay / Virtual) carry headings the
- * reference plugin never shows. `opencode` and `gemini` keep their reference
- * headings although the hub serves neither today (the pack mounts with
- * opencode disabled and the hub's channel lane drops gemini rows), so those
- * two groups stay empty until the hub emits them. `freehub` is the catch-all
- * for a channel provider this table grows stale on.
+ * reference plugin never shows. The anonymous free lane is labeled "OpenCode"
+ * to match user expectations. `gemini` keeps its reference heading although 
+ * the hub serves neither today, so that group stays empty until the hub emits them.
+ * `freehub` is the catch-all for a channel provider this table grows stale on.
  */
 export const PLATFORM_LABELS = {
-  'our-free-model': 'Our Free Model',
-  'our-free-model-region': 'Our Free Model · region-limited',
+  'opencode': 'OpenCode',
+  'opencode-region': 'OpenCode · region-limited',
   kilo: 'Kilo',
   atomcode: 'AtomCode',
   codearts: 'CodeArts Agent',
@@ -71,11 +70,10 @@ export const PLATFORM_LABELS = {
   raccoon: 'Raccoon (商汤)',
   minimax: 'MiniMax Code',
   zcode: 'ZCode (智谱)',
-  opencode: 'OpenCode',
   gemini: 'Gemini Code Assist',
   relay: 'Relay',
   virtual: 'Virtual',
-  freehub: 'Free Model Hub',
+  hub: 'Free Model Hub',
 }
 
 /**
@@ -85,74 +83,101 @@ export const PLATFORM_LABELS = {
  * `registerConfigurableProviders` both refuse a route already declared by any
  * plugin. dsh-our-free-model's channel-pack claims the bare channel names
  * (`codearts`, `buddy`, `minimax`, `qoder`, `trae`, `cline`, `zcode`, ...)
- * plus the two free-lane routes, so this plugin must not re-declare them.
- * The hub owns adapter+directory rows under this prefix only; a hub row's
- * own `channel` / `owned_by` tags keep their bare form and are still what
- * `platformOf` returns and `state.byId` keys on.
+ * plus the two free-lane routes, so this plugin uses `free-` prefix to avoid
+ * conflicts while maintaining clear naming: `free-codearts`, `free-buddy`, etc.
+ * 
+ * This allows freehub2dsh and dsh-our-free-model to coexist, giving users
+ * choice between the hub backend and the direct channel integration.
  */
-const ROUTE_PREFIX = 'freehub-'
+const ROUTE_PREFIX = 'free-'
 
 /** Bare platform key → the provider route actually registered. */
 function routeOf(platform) {
-  return platform === '' ? ROUTE_PREFIX + 'freehub' : ROUTE_PREFIX + platform
+  return platform === '' ? ROUTE_PREFIX + 'hub' : ROUTE_PREFIX + platform
 }
 
 /** Registered provider route → bare platform key. Inverse of {@link routeOf}. */
 function platformOfRoute(route) {
   const bare = typeof route === 'string' && route.startsWith(ROUTE_PREFIX) ? route.slice(ROUTE_PREFIX.length) : ''
-  return PLATFORM_LABELS[bare] !== undefined ? bare : 'freehub'
+  return PLATFORM_LABELS[bare] !== undefined ? bare : 'hub'
 }
 
+/**
+ * All provider routes this plugin will register.
+ * Each platform gets its own route (e.g., free-codearts, free-buddy, etc.)
+ * so dsh's model picker shows them as independent groups.
+ */
 const PLATFORM_IDS = Object.keys(PLATFORM_LABELS).map(routeOf)
 
 /**
  * Which picker group a hub roster row belongs to.
  *
- * Hub 返回的模型数据只有 id 和 name，没有 channel/provider/owned_by 等标签字段。
- * 因此我们只能通过 ID 前缀来判断模型的归属平台。
- * 
- * 判断优先级：
- * 1. ID 前缀判断（codearts/、atomcode/、opencode/、gemini/ 等）
- * 2. channel/owned_by 标签判断（kilo、relay、virtual、chan: 等，为未来扩展预留）
- * 3. 默认归入 our-free-model（匿名免费通道）
+ * Uses the same precedence as freehub2copilot to ensure consistent grouping:
+ * 1. Special lanes: kilo, atomcode, virtual, relay (via owned_by or channel)
+ * 2. Channel providers: codearts, buddy, trae, etc. (via owned_by="chan:xxx" or ID prefix)
+ * 3. Free lane: anonymous free models (owned_by="free-lane") → grouped as "OpenCode"
+ * 4. Region-blocked models: separate group for region-gated models
+ *
+ * The hub's /v1/models endpoint returns OpenAI-compatible format with owned_by,
+ * channel, provider fields that enable accurate platform detection.
  */
 export function platformOf(entry) {
   const id = textOf(entry?.id)
   const channel = textOf(entry?.channel)
   const provider = textOf(entry?.provider)
-  const owned = textOf(entry?.owned_by)
+  const owned = textOf(entry?.owned_by || entry?.ownedBy)
+  const state = textOf(entry?.state)
   
-  // 优先根据 ID 前缀判断各个平台
-  if (id.startsWith('codearts/')) return 'codearts'
-  if (id.startsWith('atomcode/')) return 'atomcode'
-  if (id.startsWith('opencode/')) return 'opencode'
-  if (id.startsWith('gemini/') || id.startsWith('google/gemini')) return 'gemini'
-  if (id.startsWith('buddy/')) return 'buddy'
-  if (id.startsWith('workbuddy/')) return 'workbuddy'
-  if (id.startsWith('lobsterai/')) return 'lobsterai'
-  if (id.startsWith('qoder/')) return 'qoder'
-  if (id.startsWith('qodercn/')) return 'qodercn'
-  if (id.startsWith('trae/')) return 'trae'
-  if (id.startsWith('cline/')) return 'cline'
-  if (id.startsWith('loomy/')) return 'loomy'
-  if (id.startsWith('raccoon/')) return 'raccoon'
-  if (id.startsWith('minimax/')) return 'minimax'
-  if (id.startsWith('zcode/')) return 'zcode'
-  if (id.startsWith('kilo/') || id.includes(':free')) return 'kilo'
-  
-  // 兼容带 channel/owned_by 标签的模型（未来扩展）
-  if (channel === 'kilo' || owned === 'kilo') return 'kilo'
-  if (channel === 'atomcode' || owned === 'atomcode') return 'atomcode'
-  if (channel === 'virtual' || owned === 'virtual') return 'virtual'
-  if (channel === 'relay' || owned.startsWith('relay:')) return 'relay'
-  if (channel === 'chan' || owned.startsWith('chan:')) {
-    const head = chanProviderOf(provider, owned, id)
-    return PLATFORM_LABELS[head] !== undefined ? head : 'freehub'
+  // Kilo: owned_by="kilo" or channel="kilo" or id contains ":free"
+  if (channel === 'kilo' || owned === 'kilo' || (id.includes(':free') && !id.startsWith('codearts/'))) {
+    return 'kilo'
   }
   
-  // 默认归入匿名免费通道（our-free-model）
-  if (textOf(entry?.state) === 'region-blocked') return 'our-free-model-region'
-  return 'our-free-model'
+  // AtomCode: owned_by="atomcode" or channel="atomcode" or id starts with "atomcode/"
+  if (channel === 'atomcode' || owned === 'atomcode' || id.startsWith('atomcode/')) {
+    return 'atomcode'
+  }
+  
+  // Virtual: owned_by="virtual" or channel="virtual"
+  if (channel === 'virtual' || owned === 'virtual') {
+    return 'virtual'
+  }
+  
+  // Relay: owned_by starts with "relay:"
+  if (owned.startsWith('relay:')) {
+    return 'relay'
+  }
+  
+  // Channel providers: owned_by="chan:xxx" or channel="chan"
+  // Extract the provider name from owned_by or use provider/ID prefix
+  if (owned.startsWith('chan:')) {
+    const chanProvider = owned.slice(5) // Remove "chan:" prefix
+    return PLATFORM_LABELS[chanProvider] !== undefined ? chanProvider : 'hub'
+  }
+  
+  if (channel === 'chan') {
+    const chanProvider = provider || idHead(id)
+    return PLATFORM_LABELS[chanProvider] !== undefined ? chanProvider : 'hub'
+  }
+  
+  // Check ID prefix for channel providers (fallback)
+  const head = idHead(id)
+  if (PLATFORM_LABELS[head] !== undefined && head !== 'opencode' && head !== 'opencode-region') {
+    return head
+  }
+  
+  // Region-blocked models: separate group
+  if (state === 'region-blocked' || state === 'regionBlocked') {
+    return 'opencode-region'
+  }
+  
+  // Default: anonymous free lane (owned_by="free-lane" or no special markers) → OpenCode
+  return 'opencode'
+}
+
+function idHead(id) {
+  const slash = id.indexOf('/')
+  return slash > 0 ? id.slice(0, slash) : ''
 }
 
 /** Bare model id the picker shows: routing prefixes belong to the group heading. */
@@ -182,14 +207,6 @@ export function pickerIdOf(entry) {
   if (platform === 'zcode' && id.startsWith('zcode/')) return id.slice('zcode/'.length)
   if (platform === 'kilo' && id.startsWith('kilo/')) return id.slice('kilo/'.length)
   
-  // 兼容带 channel 标签的模型（未来扩展）
-  const channel = textOf(entry?.channel)
-  const owned = textOf(entry?.owned_by)
-  if (channel === 'chan' || owned.startsWith('chan:')) {
-    const head = chanProviderOf(textOf(entry?.provider), owned, id)
-    if (head !== '' && id.startsWith(`${head}/`)) return id.slice(head.length + 1)
-  }
-  
   return id
 }
 
@@ -204,11 +221,10 @@ export function displayNameOf(entry) {
 }
 
 /**
- * Hub `/hub-models` rows → the shell's internal roster, one row per
- * (platform, picker id): two configured relays may legally declare the same
- * model id, and the hub guarantees nothing else duplicates. A row with no id
- * is dropped rather than picked — an idless model cannot be resolved, routed
- * or shown.
+ * Hub `/v1/models` rows → the shell's internal roster, one row per
+ * (platform, picker id). The `/v1/models` endpoint returns OpenAI-compatible
+ * format with `owned_by`, `channel`, `provider` fields that enable accurate
+ * platform detection, unlike `/hub-models` which only has basic fields.
  */
 export function buildRoster(rows) {
   const roster = []
@@ -227,20 +243,14 @@ export function buildRoster(rows) {
       pickerId,
       platform,
       name: displayNameOf(row),
-      contextWindow: positiveInt(row.contextWindow) ?? 131072,
-      maxOutput: positiveInt(row.maxOutput) ?? 32768,
+      contextWindow: positiveInt(row.context_window || row.contextWindow) ?? 131072,
+      maxOutput: positiveInt(row.max_output || row.maxOutput) ?? 32768,
       vision: row.vision === true,
       efforts: Array.isArray(row.efforts) ? row.efforts.filter(item => typeof item === 'string' ? item !== '' : typeof item?.id === 'string' && item.id !== '') : [],
-      effortDefault: typeof row.effortDefault === 'string' ? row.effortDefault : undefined,
+      effortDefault: typeof row.effortDefault === 'string' ? row.effortDefault : typeof row.effort_default === 'string' ? row.effort_default : undefined,
     })
   }
   return roster
-}
-
-function chanProviderOf(provider, owned, id) {
-  if (provider !== '') return provider
-  if (owned.startsWith('chan:')) return owned.slice('chan:'.length)
-  return idHead(id)
 }
 
 function textOf(value) {
@@ -481,13 +491,16 @@ export function apply(ctx, config) {
   async function refreshRoster() {
     try {
       await ensureDaemon(logger, settings)
-      const response = await fetch(`${settings.baseUrl}/hub-models`, {
+      // Use /v1/models endpoint (OpenAI-compatible format) instead of /hub-models
+      // because it includes owned_by, channel, provider fields needed for accurate
+      // platform detection, matching freehub2copilot's approach.
+      const response = await fetch(`${settings.baseUrl}/v1/models`, {
         headers: hubHeaders(settings),
         signal: AbortSignal.timeout(15000),
       })
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
       const payload = await response.json()
-      state.roster = buildRoster(payload.models ?? [])
+      state.roster = buildRoster(payload.data ?? [])
       state.byId = new Map(state.roster.flatMap(entry => [[`${entry.platform}\0${entry.pickerId}`, entry], [entry.hubId, entry]]))
       logger.info?.(`freehub2dsh: roster refreshed (${state.roster.length} models across ${new Set(state.roster.map(entry => entry.platform)).size} platforms)`)
       try { registration.replace(PLATFORM_IDS) } catch { /* fiber already disposed */ }
