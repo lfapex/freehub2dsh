@@ -31,8 +31,8 @@ import { fileURLToPath } from 'node:url'
 
 export const name = 'freehub2dsh'
 
-/** dsh mounts this on the web composition; no kernel service is borrowed. */
-export const inject = []
+/** Wait for the llm service so the hub adapter can register into the picker. */
+export const inject = ['llm']
 
 const DEFAULT_BASE = 'http://127.0.0.1:8330'
 const HUB_HOME = path.join(homedir(), '.free-model-hub')

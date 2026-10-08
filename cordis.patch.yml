@@ -1,0 +1,5 @@
+# freehub2dsh — bundle patch so dsh 插件管理器能把它当组合包安装。
+- insert:
+    - id: freehub2dsh
+      name: 'freehub2dsh'
+      config: {}
