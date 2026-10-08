@@ -257,11 +257,6 @@ function textOf(value) {
   return typeof value === 'string' ? value.trim() : ''
 }
 
-function idHead(id) {
-  const slash = id.indexOf('/')
-  return slash > 0 ? id.slice(0, slash) : ''
-}
-
 function bareId(id) {
   const slash = id.lastIndexOf('/')
   return slash >= 0 ? id.slice(slash + 1) : id
