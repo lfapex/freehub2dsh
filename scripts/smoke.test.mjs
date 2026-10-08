@@ -52,7 +52,15 @@ test('SSE stream from a mock hub re-emits as dsh chunks with usage and finish', 
   let registered
   const ctx = {
     logger: { info: () => {}, warn: () => {} },
-    llm: { registerAdapter: (providers, adapter) => { registered = adapter; return { replace() {} } } },
+    llm: {
+      registerAdapter: (providers, adapter) => {
+        // Mirror dsh-llm prepareRoutes: a missing providerRetryPolicy is TypeError at activate.
+        const policy = adapter.providerRetryPolicy(providers[0])
+        assert.equal(policy, undefined)
+        registered = adapter
+        return { replace() {} }
+      },
+    },
     on: () => {},
   }
   const config = { hubBaseUrl: 'http://127.0.0.1:18740', hubKey: 'K-mock' }
@@ -80,7 +88,7 @@ test('SSE stream from a mock hub re-emits as dsh chunks with usage and finish', 
 test('a turn against a dead hub yields the install hint, not a raw stack', async () => {
   const originalFetch = globalThis.fetch
   let registered
-  const ctx = { logger: { info: () => {}, warn: () => {} }, llm: { registerAdapter: (p, a) => { registered = a; return { replace() {} } } }, on: () => {} }
+  const ctx = { logger: { info: () => {}, warn: () => {} }, llm: { registerAdapter: (p, a) => { a.providerRetryPolicy(p[0]); registered = a; return { replace() {} } } }, on: () => {} }
   // A port nothing listens on; an explicit key so no daemon autostart fires.
   mod.apply(ctx, { hubBaseUrl: 'http://127.0.0.1:18741', hubKey: 'K-x' })
   const chunks = []

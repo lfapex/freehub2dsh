@@ -58,6 +58,9 @@ export function apply(ctx, config) {
   const adapter = {
     providerInfo: () => ({ id: 'freehub2dsh', name: 'Free Model Hub' }),
 
+    // dsh-llm prepareRoutes calls this at register time; a missing method is TypeError and the plugin never activates.
+    providerRetryPolicy: () => undefined,
+
     imageRequestPricing: () => undefined,
 
     async listModels(provider) {
