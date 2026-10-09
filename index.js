@@ -118,8 +118,15 @@ const PLATFORM_IDS = Object.keys(PLATFORM_LABELS).map(routeOf)
  * 3. Free lane: anonymous free models (owned_by="free-lane") → grouped as "OpenCode"
  * 4. Region-blocked models: separate group for region-gated models
  *
- * The hub's /v1/models endpoint returns OpenAI-compatible format with owned_by,
- * channel, provider fields that enable accurate platform detection.
+ * Lanes are decided by the hub's own tags (`owned_by`, `channel`) alone — never
+ * by id shape. `ownedByOf()` stamps `kilo` on every Kilo row regardless of how
+ * the id is spelled, so an id heuristic buys nothing and only misfires: `:free`
+ * is Kilo's marker but not Kilo-exclusive (Cline's free tier serves `:free` and
+ * `cline-free/` ids), and `openrouter/` is a real upstream namespace, not a
+ * Kilo one. Keep this in step with `platformOf` in freehub2copilot.
+ *
+ * The hub's /v1/models endpoint returns OpenAI-compatible rows carrying
+ * owned_by, channel, provider and state.
  */
 export function platformOf(entry) {
   const id = textOf(entry?.id)
@@ -127,9 +134,9 @@ export function platformOf(entry) {
   const provider = textOf(entry?.provider)
   const owned = textOf(entry?.owned_by || entry?.ownedBy)
   const state = textOf(entry?.state)
-  
-  // Kilo: owned_by="kilo" or channel="kilo" or id contains ":free"
-  if (channel === 'kilo' || owned === 'kilo' || (id.includes(':free') && !id.startsWith('codearts/'))) {
+
+  // Kilo: owned_by="kilo" or channel="kilo"
+  if (channel === 'kilo' || owned === 'kilo') {
     return 'kilo'
   }
   
@@ -180,32 +187,41 @@ function idHead(id) {
   return slash > 0 ? id.slice(0, slash) : ''
 }
 
+/** Platform key → the ID prefix to strip (the `platform/` routing segment). */
+const PLATFORM_PREFIX = {
+  codearts: 'codearts/',
+  atomcode: 'atomcode/',
+  opencode: 'opencode/',
+  buddy: 'buddy/',
+  workbuddy: 'workbuddy/',
+  lobsterai: 'lobsterai/',
+  qoder: 'qoder/',
+  qodercn: 'qodercn/',
+  trae: 'trae/',
+  cline: 'cline/',
+  loomy: 'loomy/',
+  raccoon: 'raccoon/',
+  minimax: 'minimax/',
+  zcode: 'zcode/',
+  kilo: 'kilo/',
+}
+
 /** Bare model id the picker shows: routing prefixes belong to the group heading. */
 export function pickerIdOf(entry) {
   const id = textOf(entry?.id)
   if (id === '') return ''
   const platform = platformOf(entry)
-  
-  // 去除各个平台的 ID 前缀
-  if (platform === 'codearts' && id.startsWith('codearts/')) return id.slice('codearts/'.length)
-  if (platform === 'atomcode' && id.startsWith('atomcode/')) return id.slice('atomcode/'.length)
-  if (platform === 'opencode' && id.startsWith('opencode/')) return id.slice('opencode/'.length)
+
+  // Gemini uses two alternate prefixes
   if (platform === 'gemini') {
     if (id.startsWith('google/gemini/')) return id.slice('google/gemini/'.length)
     if (id.startsWith('gemini/')) return id.slice('gemini/'.length)
+    return id
   }
-  if (platform === 'buddy' && id.startsWith('buddy/')) return id.slice('buddy/'.length)
-  if (platform === 'workbuddy' && id.startsWith('workbuddy/')) return id.slice('workbuddy/'.length)
-  if (platform === 'lobsterai' && id.startsWith('lobsterai/')) return id.slice('lobsterai/'.length)
-  if (platform === 'qoder' && id.startsWith('qoder/')) return id.slice('qoder/'.length)
-  if (platform === 'qodercn' && id.startsWith('qodercn/')) return id.slice('qodercn/'.length)
-  if (platform === 'trae' && id.startsWith('trae/')) return id.slice('trae/'.length)
-  if (platform === 'cline' && id.startsWith('cline/')) return id.slice('cline/'.length)
-  if (platform === 'loomy' && id.startsWith('loomy/')) return id.slice('loomy/'.length)
-  if (platform === 'raccoon' && id.startsWith('raccoon/')) return id.slice('raccoon/'.length)
-  if (platform === 'minimax' && id.startsWith('minimax/')) return id.slice('minimax/'.length)
-  if (platform === 'zcode' && id.startsWith('zcode/')) return id.slice('zcode/'.length)
-  if (platform === 'kilo' && id.startsWith('kilo/')) return id.slice('kilo/'.length)
+
+  const prefix = PLATFORM_PREFIX[platform]
+  if (prefix !== undefined && id.startsWith(prefix)) return id.slice(prefix.length)
+
   // Unknown channel (hub catch-all): the first segment is routing, drop it.
   if (platform === 'hub') return bareId(id)
 
@@ -391,6 +407,7 @@ export function apply(ctx, config) {
         const decoder = new TextDecoder()
         const sink = createBlockSink()
         let buffer = ''
+        let scanOffset = 0
         let usage
         let finish
         while (true) {
@@ -398,9 +415,9 @@ export function apply(ctx, config) {
           if (row.done) break
           buffer += decoder.decode(row.value, { stream: true })
           let nl
-          while ((nl = buffer.indexOf('\n')) !== -1) {
-            const line = buffer.slice(0, nl).trim()
-            buffer = buffer.slice(nl + 1)
+          while ((nl = buffer.indexOf('\n', scanOffset)) !== -1) {
+            const line = buffer.slice(scanOffset, nl).trim()
+            scanOffset = nl + 1
             if (line === '' || line.startsWith(':')) continue
             if (!line.startsWith('data:')) continue
             const payload = line.slice(5).trim()
@@ -423,6 +440,9 @@ export function apply(ctx, config) {
             const reason = event.choices?.[0]?.finish_reason
             if (typeof reason === 'string' && reason !== '') finish = reason
           }
+          // Trim consumed portion to prevent unbounded buffer growth
+          buffer = buffer.slice(scanOffset)
+          scanOffset = 0
         }
         yield* sink.close()
         if (usage !== undefined) {

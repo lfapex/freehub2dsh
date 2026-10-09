@@ -173,6 +173,17 @@ test('platformOf groups a roster row by owned_by/channel with id-prefix fallback
   assert.equal(mod.platformOf({ id: 'muse-spark-1.2-contributor-free', channel: 'free', regionSensitive: true, state: 'region-blocked', owned_by: 'our-free-model-region' }), 'opencode-region')
   assert.equal(mod.platformOf({ id: 'nvidia/nemotron-3.5-lightning:free', name: 'Kilo Nemotron 3.5 Lightning', channel: 'kilo', owned_by: 'kilo' }), 'kilo')
   assert.equal(mod.platformOf({ id: 'nvidia/nemotron-3.5-lightning:free', owned_by: 'kilo' }), 'kilo')
+  // Kilo's own id shapes, all lane-tagged by the hub regardless of spelling.
+  assert.equal(mod.platformOf({ id: 'kilo-auto/free', channel: 'kilo', owned_by: 'kilo' }), 'kilo')
+  assert.equal(mod.platformOf({ id: 'kilo-auto/off', owned_by: 'kilo' }), 'kilo')
+  assert.equal(mod.platformOf({ id: 'openrouter/free', owned_by: 'kilo' }), 'kilo')
+  // `:free` is Kilo's marker but NOT Kilo-exclusive — Cline's free tier
+  // serves `:free` and `cline-free/` ids under the chan lane. A chan row must
+  // not be stolen by the Kilo group just because of the suffix.
+  assert.equal(mod.platformOf({ id: 'cline/gpt-5.2:free', channel: 'chan', provider: 'cline', owned_by: 'chan:cline' }), 'cline')
+  assert.equal(mod.platformOf({ id: 'cline/cline-free/deepseek-v4.1-flash', channel: 'chan', provider: 'cline', owned_by: 'chan:cline' }), 'cline')
+  assert.equal(mod.platformOf({ id: 'codearts/GLM-5.3:free', channel: 'chan', provider: 'codearts', owned_by: 'chan:codearts' }), 'codearts')
+  assert.equal(mod.platformOf({ id: 'atomcode/glm-4.6:free', channel: 'atomcode', owned_by: 'atomcode' }), 'atomcode')
   assert.equal(mod.platformOf({ id: 'buddy/deepseek-v4-pro', channel: 'chan', provider: 'buddy', owned_by: 'chan:buddy' }), 'buddy')
   assert.equal(mod.platformOf({ id: 'trae/kimi-k3', owned_by: 'chan:trae' }), 'trae')
   assert.equal(mod.platformOf({ id: 'zcode/GLM-5.3', channel: 'chan', provider: 'zcode' }), 'zcode')
