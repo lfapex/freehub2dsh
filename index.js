@@ -206,18 +206,22 @@ export function pickerIdOf(entry) {
   if (platform === 'minimax' && id.startsWith('minimax/')) return id.slice('minimax/'.length)
   if (platform === 'zcode' && id.startsWith('zcode/')) return id.slice('zcode/'.length)
   if (platform === 'kilo' && id.startsWith('kilo/')) return id.slice('kilo/'.length)
-  
+  // Unknown channel (hub catch-all): the first segment is routing, drop it.
+  if (platform === 'hub') return bareId(id)
+
   return id
 }
 
-/** Friendly picker name: never the `provider/model` wire id, never a raw slug. */
+/**
+ * Picker name: the hub's given name verbatim, else the bare model id verbatim.
+ * Never rewritten — a display name whose case differs from the wire id gets
+ * copy-pasted into configs and the hub then rejects the call outright.
+ */
 export function displayNameOf(entry) {
   const id = textOf(entry?.id)
   const given = textOf(entry?.name)
-  if (given !== '' && isPrettyName(given, id)) return given
-  const bare = bareId(id)
-  if (platformOf(entry) === 'kilo') return `Kilo ${titleCase(bare.replace(/:free$/i, ''))}`
-  return titleCase(bare.replace(/-free$/i, ''))
+  if (given !== '' && given !== id && !given.includes('/')) return given
+  return bareId(id)
 }
 
 /**
@@ -264,26 +268,6 @@ function bareId(id) {
 
 function positiveInt(value) {
   return Number.isSafeInteger(value) && value > 0 ? value : undefined
-}
-
-/** True when `name` is already a picker label, not a routing id or a slug. */
-function isPrettyName(name, id) {
-  if (name === '' || name === id) return false
-  if (name.includes('/')) return false
-  if (/^[a-z0-9]+(?:[-_.:][a-z0-9]+)+$/.test(name)) return false
-  return true
-}
-
-function titleCase(raw) {
-  // 保留短划线，只处理下划线、冒号和点号
-  // 这样 deepseek-v4 保持为 Deepseek-V4，而不是 Deepseek V4
-  return raw
-    .replace(/[_.:]+/g, '-')
-    .trim()
-    .split('-')
-    .filter(word => word !== '')
-    .map(word => (/^\d/.test(word) ? word : word.charAt(0).toUpperCase() + word.slice(1)))
-    .join('-')
 }
 
 export function apply(ctx, config) {
@@ -352,7 +336,9 @@ export function apply(ctx, config) {
       const defaultMaxTokens = Number.isSafeInteger(entry.maxOutput) && entry.maxOutput > 0 ? Math.min(entry.maxOutput, 32768) : 8192
       return {
         provider: route,
-        id: entry.pickerId,
+        // dsh-llm rejects resolved.id !== model, and callers may address the
+        // model by its hub wire id or its picker id — echo what arrived.
+        id: model,
         name: entry.name,
         inputModalities: entry.vision ? ['text', 'image'] : ['text'],
         context: { contextWindow },
