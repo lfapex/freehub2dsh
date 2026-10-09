@@ -190,12 +190,15 @@ test('pickerIdOf and displayNameOf never leak a routing prefix or a slug', () =>
   assert.equal(mod.pickerIdOf({ id: 'mimo-v2.6-flash-free', channel: 'free' }), 'mimo-v2.6-flash-free')
   assert.equal(mod.pickerIdOf({ id: 'gpt-4o', channel: 'relay' }), 'gpt-4o')
 
-  assert.equal(mod.displayNameOf({ id: 'buddy/deepseek-v4-pro', name: 'DeepSeek V4 Pro', channel: 'chan', provider: 'buddy' }), 'DeepSeek V4 Pro')
-  // Names are never rewritten: the hub's given name passes through verbatim,
-  // and a missing name falls back to the bare id exactly as the hub spells it.
+  assert.equal(mod.displayNameOf({ id: 'buddy/deepseek-v4-pro', name: 'DeepSeek V4 Pro', channel: 'chan', provider: 'buddy' }), 'deepseek-v4-pro')
+  // Names are never rewritten and hub-provided names are ignored: the picker
+  // shows the model id exactly as upstream spells it (case, dots, suffixes).
   // Case changes (titleCase etc.) are forbidden — callers copy the shown name
   // back as a model id and the hub rejects any altered casing.
+  assert.equal(mod.displayNameOf({ id: 'buddy/deepseek-v4-pro', name: 'DeepSeek V4 Pro', channel: 'chan', provider: 'buddy' }), 'deepseek-v4-pro')
   assert.equal(mod.displayNameOf({ id: 'trae/kimi-k3', name: 'kimi-k3', channel: 'chan', provider: 'trae' }), 'kimi-k3')
+  assert.equal(mod.displayNameOf({ id: 'mimo-v2.6-flash-free', name: 'MiMo V2.6 Flash', owned_by: 'free-lane' }), 'mimo-v2.6-flash-free')
+  assert.equal(mod.displayNameOf({ id: 'nvidia/nemotron-3.5-lightning:free', name: 'NVIDIA: Nemotron 3.5 Lightning (free)', channel: 'kilo' }), 'nemotron-3.5-lightning:free')
   assert.equal(mod.displayNameOf({ id: 'nvidia/nemotron-3-ultra:free', channel: 'kilo' }), 'nemotron-3-ultra:free')
   assert.equal(mod.displayNameOf({ id: 'newchan/gpt-x', name: 'gpt-x', channel: 'chan', provider: 'newchan' }), 'gpt-x')
 })
@@ -214,7 +217,7 @@ test('buildRoster maps one hub row per platform/picker id and drops junk', () =>
 
   const free = roster.find(entry => entry.platform === 'opencode')
   assert.deepEqual(free, {
-    hubId: 'mimo-v2.6-flash-free', pickerId: 'mimo-v2.6-flash-free', platform: 'opencode', name: 'MiMo V2.6 Flash',
+    hubId: 'mimo-v2.6-flash-free', pickerId: 'mimo-v2.6-flash-free', platform: 'opencode', name: 'mimo-v2.6-flash-free',
     contextWindow: 1048576, maxOutput: 131072, vision: true, efforts: ['low', 'high', 'high'], effortDefault: 'high',
   })
   assert.deepEqual(free.efforts, ['low', 'high', 'high'], 'roster keeps the hub ids verbatim; dedupe/name mapping is dsh-adapter side')
@@ -226,7 +229,7 @@ test('buildRoster maps one hub row per platform/picker id and drops junk', () =>
 
   const relay = roster.find(entry => entry.platform === 'relay')
   assert.equal(relay.hubId, 'gpt-4o')
-  assert.equal(relay.name, 'Relay gpt-4o', 'first relay declaring an id wins; the hub otherwise never duplicates')
+  assert.equal(relay.name, 'gpt-4o', 'first relay declaring an id wins; the hub otherwise never duplicates')
   assert.equal(relay.contextWindow, 131072, 'capability defaults when the row states none')
   assert.deepEqual(relay.efforts, [])
 })
@@ -329,7 +332,7 @@ test('hub roster registers one picker group per platform and re-binds hub wire i
   const freeModels = await registered.listModels('free-opencode')
   assert.deepEqual(freeModels.map(model => model.id), ['mimo-v2.6-flash-free', 'muse-spark-1.3-contributor-free'])
   const vision = freeModels.find(model => model.id === 'mimo-v2.6-flash-free')
-  assert.equal(vision.name, 'MiMo V2.6 Flash')
+  assert.equal(vision.name, 'mimo-v2.6-flash-free')
   assert.deepEqual(vision.inputModalities, ['text', 'image'])
   assert.match(vision.description, /vision \+ text · 1024K context/)
   const regionModels = await registered.listModels('free-opencode-region')
@@ -338,10 +341,10 @@ test('hub roster registers one picker group per platform and re-binds hub wire i
   // Kilo keeps its hub ids; channels lose the provider/ routing prefix.
   const kiloModels = await registered.listModels('free-kilo')
   assert.deepEqual(kiloModels.map(model => model.id), ['nvidia/nemotron-3.5-lightning:free'])
-  assert.equal(kiloModels[0].name, 'Kilo Nemotron 3.5 Lightning')
+  assert.equal(kiloModels[0].name, 'nemotron-3.5-lightning:free')
   const buddyModels = await registered.listModels('free-buddy')
   assert.deepEqual(buddyModels.map(model => model.id), ['deepseek-v4-pro'])
-  assert.equal(buddyModels[0].name, 'DeepSeek V4 Pro')
+  assert.equal(buddyModels[0].name, 'deepseek-v4-pro')
   assert.equal(buddyModels[0].provider, 'free-buddy')
   assert.deepEqual((await registered.listModels('free-atomcode')).map(model => model.id), ['GLM-5.2'])
   assert.deepEqual((await registered.listModels('free-relay')).map(model => model.id), ['gpt-4o'])
@@ -352,7 +355,7 @@ test('hub roster registers one picker group per platform and re-binds hub wire i
 
   // resolveModel: reference-grade facts, efforts as {id,name} objects.
   const free = await registered.resolveModel('free-opencode', 'mimo-v2.6-flash-free')
-  assert.equal(free.name, 'MiMo V2.6 Flash')
+  assert.equal(free.name, 'mimo-v2.6-flash-free')
   assert.equal(free.context.contextWindow, 1048576)
   assert.equal(free.defaultMaxTokens, 32768)
   assert.deepEqual(free.reasoning.efforts.map(effort => effort.id), ['low', 'high'])
@@ -363,7 +366,7 @@ test('hub roster registers one picker group per platform and re-binds hub wire i
 
   // A turn aimed at a picker id must reach the hub under the wire id.
   const buddyCall = await registered.prepareCall('free-buddy', 'deepseek-v4-pro')
-  assert.equal(buddyCall.model.name, 'DeepSeek V4 Pro')
+  assert.equal(buddyCall.model.name, 'deepseek-v4-pro')
   for await (const chunk of buddyCall.stream({ messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }] })) { void chunk }
   assert.equal(chatBody.model, 'buddy/deepseek-v4-pro')
 

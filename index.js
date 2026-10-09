@@ -213,15 +213,13 @@ export function pickerIdOf(entry) {
 }
 
 /**
- * Picker name: the hub's given name verbatim, else the bare model id verbatim.
- * Never rewritten — a display name whose case differs from the wire id gets
- * copy-pasted into configs and the hub then rejects the call outright.
+ * Picker name: the model id exactly as upstream spells it — case, dots,
+ * hyphens and any `-free`/`:free` suffix included. Hub-provided names are
+ * ignored: they are derived from the id, and any rewrite (titleCase, slug
+ * prettifying) breaks the copy-paste round trip and mangles version dots.
  */
 export function displayNameOf(entry) {
-  const id = textOf(entry?.id)
-  const given = textOf(entry?.name)
-  if (given !== '' && given !== id && !given.includes('/')) return given
-  return bareId(id)
+  return bareId(textOf(entry?.id))
 }
 
 /**
